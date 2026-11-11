@@ -1,35 +1,53 @@
-name: Dependency Security Scan
+name: Container Security Scan
 
+# Trigger: scan otomatis pada push dan pull request
 on:
   push:
+    branches: [ "main", "develop" ]
+  pull_request:
     branches: [ "main" ]
-  schedule:
-    # Scan otomatis setiap hari pukul 00:00 UTC
-    - cron: "0 0 * * *"
 
 jobs:
-  dependency-scan:
-    name: Scan Dependencies
+  build-and-scan:
+    name: Build & Security Scan
     runs-on: ubuntu-latest
     permissions:
       contents: read
       security-events: write
     steps:
+      # 1. Checkout source code
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Run Trivy filesystem scan
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          scan-type: "fs"
-          scan-ref: "."
-          format: "sarif"
-          output: "fs-trivy-results.sarif"
-          severity: "CRITICAL,HIGH"
+      # 2. Build Docker image
+      - name: Build Docker image
+        run: |
+          docker build -f Dockerfile.secure \
+            -t my-app:${{ github.sha }} .
 
-      - name: Upload Trivy fs scan results
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
+      # 3a. Tampilkan hasil scan di log (tidak menggagalkan pipeline)
+      - name: Show Trivy results in log
+        uses: aquasecurity/trivy-action@master
         with:
-          sarif_file: "fs-trivy-results.sarif"
-          category: "fs-scanning"
+          image-ref: "my-app:${{ github.sha }}"
+          format: "table"
+          severity: "CRITICAL,HIGH"
+          exit-code: "0"
+
+      # 3b. Scan untuk laporan SARIF
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: "my-app:${{ github.sha }}"
+          format: "sarif"
+          output: "trivy-results.sarif"
+          severity: "CRITICAL,HIGH"
+          exit-code: "1"  # Gagalkan pipeline jika ada CVE kritis
+
+      # 4. Upload hasil SARIF ke GitHub Security tab
+      - name: Upload Trivy scan results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()  # Upload meskipun step sebelumnya gagal
+        with:
+          sarif_file: "trivy-results.sarif"
+          category: "container-scanning"
